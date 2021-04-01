@@ -12,6 +12,9 @@ inputs:
     description: 'Optional - Allow canceling other workflows with the same SHA. Useful for the `pull_request.closed` event.'
     required: false
     default: 'false'
+  all_but_latest:
+    description: "Optional - Cancel all but the most recent action, can help with very deep queues"
+    required: false
   access_token:
     description: 'Your GitHub Access Token, defaults to: {{ github.token }}'
     default: '${{ github.token }}'

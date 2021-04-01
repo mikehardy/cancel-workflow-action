@@ -33,6 +33,7 @@ async function main(): Promise<void> {
   const token = core.getInput('access_token', { required: true });
   const workflow_id_input = core.getInput('workflow_id', { required: false });
   const ignore_sha = core.getInput('ignore_sha', { required: false }) === 'true';
+  const all_but_latest = core.getInput('all_but_latest', { required: false }) === 'true';
   console.log(`Found token: ${token ? 'yes' : 'no'}`);
   const workflow_ids: number[] = [];
   const octokit = github.getOctokit(token);
@@ -67,6 +68,17 @@ async function main(): Promise<void> {
           branch
         });
 
+        let cancel_before: Date;
+        if (all_but_latest) {
+          cancel_before = new Date(
+            data.workflow_runs.reduce((a, b) =>
+              parseInt(a.created_at, 10) > parseInt(b.created_at, 10) ? a : b
+            ).created_at
+          );
+        } else {
+          cancel_before = new Date(current_run.created_at);
+        }
+
         const branchWorkflows = data.workflow_runs.filter(run => run.head_branch === branch);
         console.log(
           `Found ${branchWorkflows.length} runs for workflow ${workflow_id} on branch ${branch}`
@@ -79,13 +91,24 @@ async function main(): Promise<void> {
         // Filter out for only our headSha unless ignoring it
         runningWorkflows = runningWorkflows.filter(run => ignore_sha || run.head_sha !== headSha);
 
-        // Filter all workflow runs newer than ours
-        runningWorkflows = runningWorkflows.filter(
-          run => new Date(run.created_at) < new Date(current_run.created_at)
-        );
+        // Filter workflow runs over time - retain either all before us, or just the latest
+        runningWorkflows = runningWorkflows.filter(run => {
+          // In all_but_latest mode, we must not cancel ourselves until we have canceled the rest
+          if (all_but_latest && run !== current_run) {
+            return new Date(run.created_at) < cancel_before;
+          } else {
+            return new Date(run.created_at) < new Date(current_run.created_at);
+          }
+        });
 
         console.log(`with ${runningWorkflows.length} runs to cancel.`);
         await cancelWorkflowRuns(runningWorkflows, owner, repo, token);
+
+        // In all_but_latest_mode, we may need to cancel ourselves as well.
+        // We postponed canceling this run because otherwise we couldn't cancel the rest.
+        if (all_but_latest && new Date(current_run.created_at) < cancel_before) {
+          await cancelWorkflowRuns([current_run], owner, repo, token);
+        }
       } catch (e) {
         const msg = e.message || e;
         console.log(`Error while canceling workflow_id ${workflow_id}: ${msg}`);
